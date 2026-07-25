@@ -1,0 +1,187 @@
+@startuml spacecraft_hybrid_uml
+!theme plain
+skinparam backgroundColor #ffffff
+skinparam classBackgroundColor #e3f2fd
+skinparam classBorderColor #1976d2
+skinparam arrowColor #1976d2
+
+title Space-Craft-Hybrid v7.21\nHybrid Spacecraft Attitude Control System
+
+package "Core Mathematics" {
+  class Quaternion {
+    w: Double
+    x: Double
+    y: Double
+    z: Double
+    --
+    + norm(): Double
+    + conjugate(): Quaternion
+    + dot(other: Quaternion): Double
+    + normalize(): Quaternion
+  }
+
+  class Vec3 {
+    x: Double
+    y: Double
+    z: Double
+    --
+    + norm(): Double
+    + scale(s: Double): Vec3
+    + add(other: Vec3): Vec3
+  }
+
+  class UnitQuaternion {
+    q: Quaternion (wrapped)
+    --
+    + mkUnitQuaternion(q: Quaternion): UnitQuaternion
+    + fromUnitQuaternion(): Quaternion
+    + compose(other: UnitQuaternion): UnitQuaternion
+  }
+
+  class InertiaTensor {
+    Ixx: Double = 100.0 kg⋅m²
+    Iyy: Double = 120.0 kg⋅m²
+    Izz: Double = 80.0 kg⋅m²
+  }
+}
+
+package "Lie Algebra & Tangent Space" {
+  class ExponentialMap {
+    {static} exponentialMap(v: Vec3): UnitQuaternion
+    --
+    Converts tangent space error vectors to rotations
+    Uses θ/2 angle + sinc normalization
+  }
+
+  class LogarithmicMap {
+    {static} logarithmicMap(q: UnitQuaternion): Vec3
+    --
+    Inverse: projects quaternion to tangent space
+    Enables rotation error as 3-vector
+  }
+}
+
+package "Spacecraft Dynamics" {
+  class SpacecraftState {
+    position: Vec3
+    velocity: Vec3
+    attitude: UnitQuaternion
+    angularVelocity: Vec3
+    time: Double
+    --
+    {static} initialState(): SpacecraftState
+  }
+
+  class SensorReading {
+    starTrackerAttitude: UnitQuaternion
+    imuAngularVelocity: Vec3
+    --
+    + simulateSensor(state: SpacecraftState): SensorReading
+    Models: star tracker jitter, IMU drift, sun vector noise
+  }
+
+  class AngularAcceleration {
+    {static} angularAcceleration(
+      inertia: InertiaTensor,
+      torque: Vec3,
+      omega: Vec3): Vec3
+    --
+    Euler rotation equations with gyroscopic coupling:
+    ψ̈ = [Ixx⁻¹(τ_x + ω_y⋅ω_z(I_z-I_y)), ...]
+  }
+
+  class GeometricIntegrator {
+    {static} integrateGeometric(
+      dt: Double,
+      inertia: InertiaTensor,
+      control: ControlCommand,
+      state: SpacecraftState): SpacecraftState
+    --
+    Exponential map integration on SO(3)
+    Preserves Lie group structure
+  }
+}
+
+package "Control System (v7.21)" {
+  class ControlCommand {
+    torque: Vec3 (max 45.0 N⋅m)
+    thrustVector: Vec3
+    --
+    Output from attitude control law
+  }
+
+  class ControlMetrics {
+    cmErrorMag: Double
+    cmEnergyRatio: Double (kinetic/potential)
+    cmRegime: String
+    cmKp: Double
+    cmKd: Double
+    cmBrakingActive: Boolean
+    --
+    Diagnostics: error magnitude, gain state, braking status
+  }
+
+  class HybridAttitudeControl {
+    {static} hybridAttitudeControl(
+      desired: UnitQuaternion,
+      current: UnitQuaternion,
+      angVel: Vec3): (ControlCommand, ControlMetrics)
+    --
+    STEP 1: Check double cover (inner product sign)
+    STEP 2: Log map error to tangent space
+    STEP 3: Four-regime gain scheduling:
+      - Acquisition (>85°): kp=8.0, kd=12.0
+      - Tracking (30-85°): kp=6.0, kd=9.5
+      - Settling (6-30°): kp=4.5, kd=9.0
+      - Fine-Point (<6°): kp=8.0, kd=24.0
+    STEP 4: Kinetic-to-potential energy ratio braking:
+      brakingMultiplier = 2.0 if E_ratio > 0.08 → 5.0+
+    STEP 5: PD torque + saturation at 45 N⋅m
+  }
+}
+
+package "Mission Simulation" {
+  class MissionSimulation {
+    {static} simulationStep(
+      desiredAttitude: UnitQuaternion,
+      state: SpacecraftState): 
+      IO (SpacecraftState, ControlCommand, ControlMetrics)
+    --
+    Single 0.01s step: sense → control → integrate
+  }
+
+  class MissionRunner {
+    {static} runMission(
+      steps: Int,
+      desired: UnitQuaternion,
+      initial: SpacecraftState):
+      IO [Trajectory]
+    --
+    Runs full mission (typically 2500 steps @ 100 Hz = 25 sec)
+    Outputs complete trajectory history
+  }
+}
+
+'' Relationships
+UnitQuaternion --> Quaternion : wraps
+UnitQuaternion --> ExponentialMap : uses
+UnitQuaternion --> LogarithmicMap : uses
+SpacecraftState --> UnitQuaternion : has
+SpacecraftState --> Vec3 : has(position, velocity, angVel)
+SensorReading --> UnitQuaternion : reads attitude
+SensorReading --> Vec3 : reads angular velocity
+HybridAttitudeControl --> UnitQuaternion : input desired, current
+HybridAttitudeControl --> Vec3 : input angVel
+HybridAttitudeControl --> ControlCommand : outputs
+HybridAttitudeControl --> ControlMetrics : outputs
+HybridAttitudeControl --> LogarithmicMap : uses for error
+AngularAcceleration --> InertiaTensor : uses
+AngularAcceleration --> Vec3 : gyroscopic terms
+GeometricIntegrator --> ExponentialMap : attitude update
+GeometricIntegrator --> AngularAcceleration : integrates
+MissionSimulation --> SensorReading : calls
+MissionSimulation --> HybridAttitudeControl : calls
+MissionSimulation --> GeometricIntegrator : calls
+MissionRunner --> MissionSimulation : loops
+
+@enduml

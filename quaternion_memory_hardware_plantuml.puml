@@ -1,0 +1,127 @@
+@startuml quaternion_memory_hardware_uml
+!theme plain
+skinparam backgroundColor #ffffff
+skinparam componentBackgroundColor #f3e5f5
+skinparam componentBorderColor #7b1fa2
+skinparam arrowColor #7b1fa2
+
+title Quaternion Memory Hardware\nFPGA-Embedded C Codesign Architecture
+
+package "FPGA Hardware Layer (Verilog)" {
+  component "QuaternionMemoryBank_Controller" as Controller {
+    [Verilog State Machine]
+    --
+    Input: clk, rst_n
+    Input: ctrl_save, q_scalar[31:0], q_x[31:0]
+    Input: q_y[31:0], q_z[31:0], angle[31:0]
+    Input: read_addr[9:0]
+    Output: r_scalar[31:0], r_x[31:0], r_y[31:0]
+    Output: r_z[31:0], r_angle[31:0]
+    Output: snapshot_count[15:0], busy_flag
+    --
+    States: IDLE, SAVE (busy=1), OUTPUT
+    Write addr auto-increment (wrap at 1023)
+    Async reads, sync writes
+  }
+
+  database "Block RAM (BRAM) Storage" as BRAM {
+    [mem_scalar: 1024×32b] float w
+    [mem_x: 1024×32b] float x
+    [mem_y: 1024×32b] float y
+    [mem_z: 1024×32b] float z
+    [mem_angle: 1024×32b] float θ
+  }
+
+  component "Testbench" as TB {
+    [tb_QuaternionMemoryBank.v]
+    --
+    Instantiates: QuaternionMemoryBank_Controller
+    Test scenarios: save → verify writes → read back
+    Generates VCD waveform for gtkwave
+  }
+
+  Controller --|> BRAM
+  TB --|> Controller
+}
+
+database "Hardware Abstraction Layer" as HAL {
+  [Memory-Mapped I/O Registers]
+  [CTRL_REG, STATUS_REG, SNAPSHOT_SEL]
+  [Simulated write_addr counter]
+}
+
+package "Embedded C Driver Layer" {
+  component "SimulatedHardwareBank Struct" as HwBank {
+    uint32_t CTRL_REG
+    uint32_t STATUS_REG
+    uint32_t Q_SCALAR, Q_X, Q_Y, Q_Z, ANGLE_REG
+    uint32_t R_SCALAR, R_X, R_Y, R_Z, R_ANGLE
+    uint16_t SNAPSHOT_COUNT
+    --
+    Models memory-mapped I/O
+    Simulates hardware in software
+  }
+
+  component "q_bank_add() API" as Add {
+    bool q_bank_add(
+      float s, float x, float y,
+      float z, float angle)
+    --
+    1. Poll busy_flag
+    2. Write s,x,y,z,angle to registers
+    3. Pulse CTRL_REG (save bit)
+    4. Increment snapshot_count
+    5. Auto-increment write_addr (wrap at 1023)
+    6. Return success
+  }
+
+  component "q_bank_read() API" as Read {
+    void q_bank_read(
+      uint32_t index,
+      float *s, float *x, float *y,
+      float *z, float *angle)
+    --
+    1. Set READ_ADDR = index
+    2. Read r_scalar, r_x, r_y, r_z, r_angle
+    3. Bit-cast uint32 → float
+    4. Dereference pointers
+  }
+
+  component "test_main() Driver" as Driver {
+    int main()
+    --
+    1. Initialize HW bank
+    2. Call q_bank_add() ×N
+    3. Call q_bank_read() for verification
+    4. Print snapshots
+  }
+
+  HwBank --> HAL
+  Add --> HwBank
+  Read --> HwBank
+  Driver --> Add
+  Driver --> Read
+}
+
+BRAM --> HAL
+Controller -.->|synthesizes| HAL
+
+note right of Controller
+  Produces deterministic
+  real-time behavior for
+  attitude snapshots
+end note
+
+note right of HwBank
+  C-level abstraction
+  hides FPGA complexity
+  from spacecraft code
+end note
+
+note right of Add
+  Efficient circular buffer:
+  write_addr auto-wraps
+  at 1023 entries
+end note
+
+@enduml
