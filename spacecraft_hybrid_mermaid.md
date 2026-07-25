@@ -4,110 +4,97 @@
 classDiagram
     %% Core Mathematics Layer
     class Quaternion {
-        Double w
-        Double x
-        Double y
-        Double z
-        norm() Double
-        conjugate() Quaternion
-        dot(Quaternion) Double
-        normalize() Quaternion
+        +Double w
+        +Double x
+        +Double y
+        +Double z
+        +norm()
+        +conjugate()
+        +dot()
+        +normalize()
     }
 
     class Vec3 {
-        Double x
-        Double y
-        Double z
-        norm() Double
-        scale(Double) Vec3
-        add(Vec3) Vec3
+        +Double x
+        +Double y
+        +Double z
+        +norm()
+        +scale()
+        +add()
     }
 
     class UnitQuaternion {
-        Quaternion q
-        mkUnitQuaternion(Quaternion)* UnitQuaternion
-        fromUnitQuaternion()* Quaternion
-        compose(UnitQuaternion) UnitQuaternion
+        +Quaternion q
+        +mkUnitQuaternion()
+        +fromUnitQuaternion()
+        +compose()
     }
 
     class InertiaTensor {
-        Double Ixx = 100.0
-        Double Iyy = 120.0
-        Double Izz = 80.0
-        Note: kg·m²
+        +Double Ixx
+        +Double Iyy
+        +Double Izz
     }
 
     %% Lie Algebra
     class ExponentialMap {
-        exponentialMap(Vec3)* UnitQuaternion
-        Note: Tangent space → SO(3) rotation
+        +exponentialMap()
     }
 
     class LogarithmicMap {
-        logarithmicMap(UnitQuaternion)* Vec3
-        Note: SO(3) rotation → tangent space
+        +logarithmicMap()
     }
 
     %% Spacecraft State
     class SpacecraftState {
-        Vec3 position
-        Vec3 velocity
-        UnitQuaternion attitude
-        Vec3 angularVelocity
-        Double time
+        +Vec3 position
+        +Vec3 velocity
+        +UnitQuaternion attitude
+        +Vec3 angularVelocity
+        +Double time
     }
 
     class SensorReading {
-        UnitQuaternion starTrackerAttitude
-        Vec3 imuAngularVelocity
-        simulateSensor(SpacecraftState)* SensorReading
-        Note: Adds jitter, drift, noise
+        +UnitQuaternion starTrackerAttitude
+        +Vec3 imuAngularVelocity
+        +simulateSensor()
     }
 
     %% Control System
     class ControlCommand {
-        Vec3 torque
-        Vec3 thrustVector
-        Note: torque maxed at 45 N·m
+        +Vec3 torque
+        +Vec3 thrustVector
     }
 
     class ControlMetrics {
-        Double cmErrorMag
-        Double cmEnergyRatio
-        String cmRegime
-        Double cmKp
-        Double cmKd
-        Boolean cmBrakingActive
+        +Double cmErrorMag
+        +Double cmEnergyRatio
+        +String cmRegime
+        +Double cmKp
+        +Double cmKd
+        +Boolean cmBrakingActive
     }
 
     class HybridAttitudeControl {
-        hybridAttitudeControl(UnitQuaternion, UnitQuaternion, Vec3)*
-        (ControlCommand, ControlMetrics)
-        Note: 4-regime gain scheduling + energy-ratio braking
+        +hybridAttitudeControl()
     }
 
     %% Dynamics
     class AngularAcceleration {
-        angularAcceleration(InertiaTensor, Vec3, Vec3)* Vec3
-        Note: Euler equations with gyroscopic coupling
+        +angularAcceleration()
     }
 
     class GeometricIntegrator {
-        integrateGeometric(Double, InertiaTensor, ControlCommand, SpacecraftState)* SpacecraftState
-        Note: Exponential map on SO(3)
+        +integrateGeometric()
     }
 
     %% Mission
     class MissionSimulation {
-        simulationStep(UnitQuaternion, SpacecraftState)* 
-        IO(SpacecraftState, ControlCommand, ControlMetrics)
-        Note: 0.01s time step (100 Hz)
+        +simulationStep()
     }
 
     class MissionRunner {
-        runMission(Int, UnitQuaternion, SpacecraftState)*
-        IO List(Trajectory)
-        Note: 2500 steps = 25 seconds
+        +runMission()
     }
 
     %% Relationships
@@ -140,25 +127,3 @@ classDiagram
     MissionSimulation --> SpacecraftState
     
     MissionRunner --> MissionSimulation
-```
-
-## Key Control Features
-
-### Four Regimes (Gain Scheduling)
-| Regime | Error Range | kp | kd | Purpose |
-|--------|-------------|----|----|---------|
-| Acquisition | > 1.5 rad (85°) | 8.0 | 12.0 | Fast slew |
-| Tracking | 0.5–1.5 rad | 6.0 | 9.5 | Controlled approach |
-| Settling | 0.1–0.5 rad | 4.5 | 9.0 | Smooth convergence |
-| Fine-Point | < 0.1 rad (6°) | 8.0 | 24.0 | Precision hold |
-
-### Energy-Ratio Braking
-- **Kinetic energy ratio** = ω² / |error|
-- If ratio > 0.08: apply 5× + 4×ratio multiplier to kd
-- If ratio > 0.01: apply 3.5× + 2.5×ratio multiplier to kd
-- **Goal**: Prevent overshoot and enforce monotonic convergence
-
-### Quaternion Double-Cover Avoidance
-- Checks dot product of desired · current
-- If negative, negates target to take shortest path
-- Prevents 360° unwinding
